@@ -402,12 +402,21 @@ func main() {
 	fmt.Println()
 
 	n := cfg.Generate
-	for _, arg := range os.Args[1:] {
+	args := os.Args[1:]
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		var g int
+		// handle -g=3 or --generate=3
 		if _, err := fmt.Sscanf(arg, "-g=%d", &g); err == nil && g >= 1 {
 			n = g
 		} else if _, err := fmt.Sscanf(arg, "--generate=%d", &g); err == nil && g >= 1 {
 			n = g
+			// handle -g 3 or --generate 3
+		} else if (arg == "-g" || arg == "--generate") && i+1 < len(args) {
+			if _, err := fmt.Sscanf(args[i+1], "%d", &g); err == nil && g >= 1 {
+				n = g
+				i++
+			}
 		}
 	}
 
