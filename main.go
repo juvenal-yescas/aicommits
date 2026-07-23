@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/manifoldco/promptui"
@@ -26,6 +27,7 @@ type Config struct {
 	CommitType    string
 	Timeout       time.Duration
 	MaxLength     int
+	Generate      int
 }
 
 // ChatMessage for OpenAI-compatible API
@@ -63,6 +65,7 @@ func loadConfig() (*Config, error) {
 		CommitType: "conventional",
 		Timeout:    60 * time.Second,
 		MaxLength:  72,
+		Generate:   1,
 	}
 
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
@@ -100,6 +103,12 @@ func loadConfig() (*Config, error) {
 		n, err := k.Int()
 		if err == nil && n >= 20 {
 			cfg.MaxLength = n
+		}
+	}
+	if k, err := sec.GetKey("generate"); err == nil {
+		n, err := k.Int()
+		if err == nil && n >= 1 {
+			cfg.Generate = n
 		}
 	}
 
@@ -318,6 +327,36 @@ func generateCommitMessage(cfg *Config, diff string) (string, error) {
 	return sanitizeMessage(chatResp.Choices[0].Message.Content), nil
 }
 
+func generateCommitMessages(cfg *Config, diff string, n int) ([]string, error) {
+	results := make([]string, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = generateCommitMessage(cfg, diff)
+		}(i)
+	}
+	wg.Wait()
+
+	var messages []string
+	var firstErr error
+	for i, m := range results {
+		if errs[i] != nil {
+			if firstErr == nil {
+				firstErr = errs[i]
+			}
+		} else if m != "" {
+			messages = append(messages, m)
+		}
+	}
+	if len(messages) == 0 {
+		return nil, firstErr
+	}
+	return messages, nil
+}
+
 func runGitCommit(message string, noVerify bool) error {
 	args := []string{"commit", "-m", message}
 	if noVerify {
@@ -362,49 +401,74 @@ func main() {
 	}
 	fmt.Println()
 
-	fmt.Println("🔍 Generating commit message...")
-	message, err := generateCommitMessage(cfg, staged.Diff)
+	n := cfg.Generate
+	for _, arg := range os.Args[1:] {
+		var g int
+		if _, err := fmt.Sscanf(arg, "-g=%d", &g); err == nil && g >= 1 {
+			n = g
+		} else if _, err := fmt.Sscanf(arg, "--generate=%d", &g); err == nil && g >= 1 {
+			n = g
+		}
+	}
+
+	if n > 1 {
+		fmt.Printf("🔍 Generating %d commit messages...\n", n)
+	} else {
+		fmt.Println("🔍 Generating commit message...")
+	}
+
+	messages, err := generateCommitMessages(cfg, staged.Diff, n)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating commit message: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("\n💬 Suggested commit message:\n  %s\n\n", message)
-
-	prompt := promptui.Select{
-		Label: "Use this commit message?",
-		Items: []string{"✅ Yes", "✏️  Edit", "❌ Cancel"},
+	// Build select items: all messages + edit + cancel
+	items := make([]string, 0, len(messages)+2)
+	for i, m := range messages {
+		items = append(items, fmt.Sprintf("%d: %s", i+1, m))
 	}
-	idx, _, err := prompt.Run()
+	items = append(items, "✏️  Enter custom message")
+	items = append(items, "❌ Cancel")
+
+	selPr := promptui.Select{
+		Label: "Select a commit message",
+		Items: items,
+		Size:  len(items),
+	}
+	idx, _, err := selPr.Run()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Cancelled.")
 		os.Exit(1)
 	}
 
-	switch idx {
-	case 0: // Yes
-		if err := runGitCommit(message, false); err != nil {
-			fmt.Fprintf(os.Stderr, "git commit failed: %v\n", err)
-			os.Exit(1)
+	var finalMessage string
+	switch {
+	case idx < len(messages): // picked a generated message
+		finalMessage = messages[idx]
+	case idx == len(messages): // Edit
+		defaultMsg := ""
+		if len(messages) > 0 {
+			defaultMsg = messages[0]
 		}
-		fmt.Println("✅ Committed!")
-	case 1: // Edit
 		editPrompt := promptui.Prompt{
-			Label:   "Edit commit message",
-			Default: message,
+			Label:   "Commit message",
+			Default: defaultMsg,
 		}
 		edited, err := editPrompt.Run()
 		if err != nil || strings.TrimSpace(edited) == "" {
 			fmt.Fprintln(os.Stderr, "Cancelled.")
 			os.Exit(1)
 		}
-		if err := runGitCommit(edited, false); err != nil {
-			fmt.Fprintf(os.Stderr, "git commit failed: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Println("✅ Committed!")
-	case 2: // Cancel
+		finalMessage = strings.TrimSpace(edited)
+	default: // Cancel
 		fmt.Println("Cancelled.")
 		os.Exit(0)
 	}
+
+	if err := runGitCommit(finalMessage, false); err != nil {
+		fmt.Fprintf(os.Stderr, "git commit failed: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("✅ Committed!")
 }
