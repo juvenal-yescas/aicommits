@@ -3,6 +3,9 @@ name: Release draft mac silicon
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   ReleaseDraft:
     runs-on: macos-latest
@@ -20,7 +23,7 @@ jobs:
         run: |
           go build -ldflags="-s -w" -trimpath -o aicommits ./cmd
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: draft
           draft: true
