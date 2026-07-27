@@ -1,0 +1,29 @@
+name: Release draft mac silicon
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ReleaseDraft:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+          check-latest: true
+          cache: true
+
+      - name: Build
+        run: |
+          go build -ldflags="-s -w" -trimpath -o aicommits ./cmd
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: draft
+          draft: true
+          name: Draft
+          files: |
+            aicommits
