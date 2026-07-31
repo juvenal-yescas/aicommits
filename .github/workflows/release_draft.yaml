@@ -1,4 +1,4 @@
-name: Release draft mac silicon
+name: Release draft
 
 on:
   workflow_dispatch:
@@ -8,7 +8,21 @@ permissions:
 
 jobs:
   ReleaseDraft:
-    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - name: mac-silicon
+            os: macos-latest
+            goos: darwin
+            goarch: arm64
+            binary: aicommits-mac-silicon
+          - name: raspberry-pi
+            os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            binary: aicommits-raspberry-pi
+
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
 
@@ -20,8 +34,11 @@ jobs:
           cache: true
 
       - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
         run: |
-          go build -ldflags="-s -w" -trimpath -o aicommits ./cmd
+          go build -ldflags="-s -w" -trimpath -o ${{ matrix.binary }} ./cmd
 
       - uses: softprops/action-gh-release@v3
         with:
@@ -29,4 +46,4 @@ jobs:
           draft: true
           name: Draft
           files: |
-            aicommits
+            ${{ matrix.binary }}
